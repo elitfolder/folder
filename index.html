@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Organizador de documentos</title>
+<style>
+:root{--bg:#eef0f1;--panel:#fff;--ink:#1b2a33;--muted:#5d6b73;--line:#cfd6da;--accent:#0f5c6e;--accent-ink:#fff;--mark:#f2c230;--ok:#1d7a46;--warn:#a8480f}
+@media (prefers-color-scheme:dark){:root{--bg:#151b1f;--panel:#1e272c;--ink:#e7ecee;--muted:#9aa8af;--line:#33424a;--accent:#5fb8cc;--accent-ink:#0b1519;--mark:#d9ac1c;--ok:#5fcf8f;--warn:#f0a066}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:24px 16px 48px;display:grid;gap:20px}
+h1{font-size:1.6rem;margin:0}
+h2{font-size:1.1rem;margin:0 0 10px}
+p{margin:0}.muted{color:var(--muted);font-size:.92rem}
+section{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 14px;border-radius:4px}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:focus-visible,input:focus-visible,.drop:focus-visible{outline:3px solid var(--mark);outline-offset:2px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1;min-width:150px}
+input[type=text]{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink);width:100%}
+.drop{border:2px dashed var(--accent);border-radius:6px;padding:40px 16px;text-align:center;cursor:pointer;background:var(--panel)}
+.drop.over{background:color-mix(in srgb,var(--mark) 30%,var(--panel));border-style:solid}
+.drop.off{opacity:.5;cursor:not-allowed;border-color:var(--line)}
+.drop strong{display:block;font-size:1.15rem;margin-bottom:4px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+th{font-weight:600;font-size:.9rem;color:var(--muted)}
+td code{background:var(--bg);padding:2px 8px;border-radius:3px;font-weight:600}
+td.act{text-align:right;width:1%;white-space:nowrap}
+ul{list-style:none;margin:0;padding:0}
+li{padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap}
+li .ok{color:var(--ok)}li .warn{color:var(--warn)}
+#status{font-weight:600}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Organizador de documentos</h1>
+    <p class="muted">Arrastra tus archivos y se guardan en la carpeta de la materia según el código al inicio del nombre. Ejemplo: <code>NK01_Tarea3.xlsx</code> va a Análisis Estructural.</p>
+  </header>
+
+  <section>
+    <h2>1. Carpeta raíz</h2>
+    <div class="row">
+      <button class="primary" id="pick">Elegir carpeta raíz</button>
+      <button id="reconnect" hidden>Reconectar carpeta</button>
+      <span id="status" class="grow muted">Sin carpeta elegida.</span>
+    </div>
+    <p class="muted" style="margin-top:8px">Elige una carpeta dentro de tu Google Drive sincronizado si quieres que también se suba a la nube. Las carpetas de cada materia se crean dentro de ella.</p>
+  </section>
+
+  <section>
+    <h2>2. Archivos</h2>
+    <div class="drop off" id="drop" tabindex="0" role="button" aria-label="Soltar archivos o hacer clic para elegirlos">
+      <strong>Suelta aquí tus archivos</strong>
+      <span class="muted">o haz clic para elegirlos</span>
+    </div>
+    <input type="file" id="files" multiple hidden>
+    <p class="muted" style="margin-top:8px">La página guarda una copia en la carpeta de la materia. El original no se borra: el navegador no tiene permiso para eso.</p>
+  </section>
+
+  <section>
+    <h2>Resultado</h2>
+    <ul id="log"><li class="muted">Aún no has guardado archivos.</li></ul>
+  </section>
+
+  <section>
+    <h2>Reglas: código → materia</h2>
+    <form class="row" id="ruleForm" style="margin-bottom:12px">
+      <div style="width:130px"><input type="text" id="code" placeholder="Código (NK01)" aria-label="Código" required></div>
+      <div class="grow"><input type="text" id="subject" placeholder="Materia (Análisis Estructural)" aria-label="Materia" required></div>
+      <button class="primary" type="submit">Agregar regla</button>
+    </form>
+    <table>
+      <thead><tr><th>Código</th><th>Carpeta</th><th></th></tr></thead>
+      <tbody id="rules"></tbody>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <button id="export">Exportar reglas</button>
+      <button id="import">Importar reglas</button>
+      <input type="file" id="importFile" accept="application/json" hidden>
+    </div>
+    <p class="muted" style="margin-top:8px">Los archivos cuyo código no esté en la lista van a la carpeta <strong>Sin clasificar</strong>. Las reglas se guardan en este navegador; exporta una copia por si cambias de equipo.</p>
+  </section>
+</main>
+
+<script>
+const FALLBACK = "Sin clasificar";
+const $ = id => document.getElementById(id);
+let root = null;
+let rules = {};
+
+/* ---------- reglas (localStorage) ---------- */
+function loadRules(){
+  try { rules = JSON.parse(localStorage.getItem("rules")) || {}; } catch { rules = {}; }
+}
+function saveRules(){
+  try { localStorage.setItem("rules", JSON.stringify(rules)); } catch {}
+}
+function renderRules(){
+  const body = $("rules");
+  body.innerHTML = "";
+  const keys = Object.keys(rules).sort();
+  if(!keys.length){
+    body.innerHTML = '<tr><td colspan="3" class="muted">Agrega tu primera regla arriba.</td></tr>';
+    return;
+  }
+  for(const k of keys){
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td><code></code></td><td></td><td class='act'><button>Quitar</button></td>";
+    tr.querySelector("code").textContent = k;
+    tr.children[1].textContent = rules[k];
+    tr.querySelector("button").onclick = () => { delete rules[k]; saveRules(); renderRules(); };
+    body.appendChild(tr);
+  }
+}
+$("ruleForm").onsubmit = e => {
+  e.preventDefault();
+  const c = $("code").value.trim().toUpperCase();
+  const s = clean($("subject").value);
+  if(!c || !s) return;
+  rules[c] = s; saveRules(); renderRules();
+  e.target.reset(); $("code").focus();
+};
+$("export").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(rules, null, 2)], {type:"application/json"}));
+  a.download = "reglas.json"; a.click(); URL.revokeObjectURL(a.href);
+};
+$("import").onclick = () => $("importFile").click();
+$("importFile").onchange = async e => {
+  const f = e.target.files[0]; if(!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    for(const [k,v] of Object.entries(data)) if(typeof v === "string") rules[k.toUpperCase()] = clean(v);
+    saveRules(); renderRules();
+  } catch { alert("El archivo de reglas no es válido."); }
+  e.target.value = "";
+};
+
+/* ---------- carpeta raíz (handle guardado en IndexedDB) ---------- */
+const idb = () => new Promise((res, rej) => {
+  const r = indexedDB.open("organizador", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("kv");
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+async function kv(mode, fn){
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const st = db.transaction("kv", mode).objectStore("kv");
+    const q = fn(st); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+  });
+}
+function setStatus(msg, ready){
+  $("status").textContent = msg;
+  $("drop").classList.toggle("off", !ready);
+}
+async function ensurePermission(handle, ask){
+  const opt = {mode:"readwrite"};
+  if(await handle.queryPermission(opt) === "granted") return true;
+  return ask && (await handle.requestPermission(opt)) === "granted";
+}
+async function restoreRoot(){
+  try {
+    const h = await kv("readonly", s => s.get("root"));
+    if(!h) return;
+    root = h;
+    if(await ensurePermission(h, false)){ setStatus("Carpeta lista: " + h.name, true); }
+    else { setStatus("Carpeta guardada: " + h.name + ". Falta autorizar el acceso.", false); $("reconnect").hidden = false; }
+  } catch {}
+}
+$("pick").onclick = async () => {
+  if(!window.showDirectoryPicker){ setStatus("Este navegador no permite elegir carpetas. Usa Chrome o Edge en una computadora.", false); return; }
+  try {
+    root = await showDirectoryPicker({mode:"readwrite"});
+    await kv("readwrite", s => s.put(root, "root"));
+    $("reconnect").hidden = true;
+    setStatus("Carpeta lista: " + root.name, true);
+  } catch {}
+};
+$("reconnect").onclick = async () => {
+  if(root && await ensurePermission(root, true)){ $("reconnect").hidden = true; setStatus("Carpeta lista: " + root.name, true); }
+};
+
+/* ---------- clasificar y guardar ---------- */
+function clean(s){ return s.replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim().replace(/\.+$/, ""); }
+function subjectFor(filename){
+  const base = filename.trim().toUpperCase();
+  const codes = Object.keys(rules).sort((a,b) => b.length - a.length);
+  for(const c of codes){
+    if(base.startsWith(c) && !/[A-Z0-9]/.test(base.charAt(c.length) || " ")) return rules[c];
+  }
+  return null;
+}
+async function uniqueName(dir, name){
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : "";
+  let n = 1, candidate = name;
+  for(;;){
+    try { await dir.getFileHandle(candidate); n++; candidate = stem + " (" + n + ")" + ext; }
+    catch { return candidate; }
+  }
+}
+function addLog(text, cls){
+  const ul = $("log");
+  if(ul.firstElementChild && ul.firstElementChild.classList.contains("muted")) ul.innerHTML = "";
+  const li = document.createElement("li");
+  const a = document.createElement("span"), b = document.createElement("span");
+  a.textContent = text.left; b.textContent = text.right; b.className = cls;
+  li.append(a, b); ul.prepend(li);
+}
+async function handleFiles(list){
+  if(!root || !(await ensurePermission(root, true))){ setStatus("Primero elige o reconecta la carpeta raíz.", false); return; }
+  for(const f of list){
+    try {
+      const subject = subjectFor(f.name);
+      const folder = subject || FALLBACK;
+      const dir = await root.getDirectoryHandle(folder, {create:true});
+      const finalName = await uniqueName(dir, f.name);
+      const w = await (await dir.getFileHandle(finalName, {create:true})).createWritable();
+      await w.write(f); await w.close();
+      addLog({left:f.name, right:"→ " + folder + (finalName !== f.name ? " (como " + finalName + ")" : "")}, subject ? "ok" : "warn");
+    } catch(err) {
+      addLog({left:f.name, right:"No se pudo guardar: " + err.message}, "warn");
+    }
+  }
+}
+const drop = $("drop");
+drop.onclick = () => { if(!drop.classList.contains("off")) $("files").click(); };
+drop.onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); drop.click(); } };
+$("files").onchange = e => { handleFiles([...e.target.files]); e.target.value = ""; };
+["dragenter","dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => handleFiles([...e.dataTransfer.files].filter(f => f.type || f.size || f.name.includes("."))));
+
+loadRules(); renderRules(); restoreRoot();
+</script>
+</body>
+</html>
